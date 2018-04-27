@@ -41,11 +41,12 @@ char* types_arr[6] = {
   "gif"
 };
 
-char* content_types[4] = {
+char* content_types[5] = {
   "text/html",
   "text/plain",
   "image/jpeg",
-  "image/gif"
+  "image/gif",
+  "application/octet-stream"
 };
 
 enum {
@@ -84,29 +85,39 @@ void sig_handler(int signo) {
 // IN: string with %20
 // OUT: string with %20 replaced with spaces
 char* insertSpaces(char* str) {
-  if (!str) return NULL;
+  // error checking, for str == NULL
+  if (!str) {
+    return NULL;
+  }
+
+  // getting max value we want for i iterator
   int len = strlen(str);
-  // The maxixum i value (we don't wanna go out of bounds)
-  // Because we are searching for %20 and it is 3 characters long
   int max_it = len - space_len;
+
+  // setting up for return value
   char* ret = malloc(sizeof(char) * MAX_FILENAME_SIZE);
+  if (ret == NULL) {
+    close(connect_sock_fd);
+    close(listen_sock_fd);
+    error("Error: Unable to malloc");
+  }
+  memset(ret, 0, MAX_FILENAME_SIZE);
+  
   int i = 0;
   int j = 0;
   // Iterate through the filename, look for substring %20
   while (str[i] != '\0') {
     if (i <= max_it && str[i] == '%') {
-      if (str[i + 1] == '2' && str[i + 2] == '0') {
+      if ((i + 2) <= len && str[i + 1] == '2' && str[i + 2] == '0') {
 	ret[j] = ' ';
 	j++;
 	i += space_len;
-	continue;
       }
-    }
-    else {
+    } else {
       ret[j] = str[i];
       j++;
+      i++;
     }
-    i++;
   }
   // Place the null byte
   ret[j] = '\0';
@@ -115,44 +126,73 @@ char* insertSpaces(char* str) {
 
 // IN: filename, permissions
 // OUT: file descriptor associated with case insensitive filename
-int open_ci(char* filename, int perm) {
+int open_ci (char* filename, int perm) {
+  // setting fd
   int fd = -1;
+  // setting buffer size to 0s
   char cwd[1024];
-  getcwd(cwd, sizeof(cwd));
+  memset(cwd, 0, (sizeof(char) * 1024));
+  if (getcwd(cwd, sizeof(char) * 1024) == NULL) {
+    close(connect_sock_fd);
+    close(listen_sock_fd);
+    error("Error: unable to get name of cwd\n");
+  }
+  
   DIR* curr_dir = opendir(cwd);
-  if (opendir != NULL) {
   struct dirent* entry;
   while ((entry = readdir(curr_dir)) != NULL) {
     // case insensitive comparison of filename and current entry
+    // add in the file extension stuff, ignoring it
     if (strcasecmp(filename, entry->d_name) == 0) {
       fd = open(entry->d_name, perm);
       break;
     }
   }
-  }
   return fd;
 }
 
 // IN: request message
-// OUT: file name requested 
+// OUT: file name requested
 char* getFilename(char* req_line) {
-  if (!req_line) return NULL;
+  // checking if the request line is null
+  if (!req_line) {
+    return NULL;
+  }
+  // init variables
   char* cpy = NULL;
   char* first_line = NULL;
   char* filename = NULL;
-  int it = 0;
-  // Necessary as strsep modifies input
+    
+  // make a copy of the request line
   cpy = req_line;
-  // Get the first line of request message
+  
+  // get the first line of the request message
   first_line = strsep(&cpy, "\n");
   if (first_line != NULL) {
     // Get the file name from the first line
-    filename = NULL; 
-    while ((filename = strsep(&first_line, " ")) != NULL) {
-      if (it == 1) break;
-      it++;
+    int line_length = strlen(first_line);
+    int f_occur = 0;
+    int l_occur = line_length;
+    for (int i = 0; i < line_length; i++) {
+      if (first_line[i] == ' ') {
+	f_occur = i;
+	break;
+      }
     }
+    for (int i = line_length - 1; i >=0; i--) {
+      if (first_line[i] == ' ') {
+	l_occur = i;
+	break;
+      }
+    }
+    
+    int filename_length = l_occur - f_occur;
+    filename = malloc(sizeof(char) * filename_length);
+    memset(filename, 0, sizeof(char) * filename_length);
+
+    strncpy(filename, (first_line + f_occur + 1), ((l_occur-f_occur)-1));
   }
+  // handle spaces
   filename = insertSpaces(filename);
   // remove the /
   filename = filename + 1;
@@ -162,55 +202,77 @@ char* getFilename(char* req_line) {
 // IN: filename
 // OUT: filetype number (based on enum)
 char* getFiletype(char* filename) {
+  // init
   char* ext = NULL;
-  int it = 0;
-  while ((ext = strsep(&filename, ".")) != NULL) {
-    if (it == 1) break;
-    it++;
-  }
-  if (ext != NULL) {
-    if (strcmp(ext, types_arr[html]) == 0) return content_types[0];
-    else if (strcmp(ext, types_arr[htm]) == 0) return content_types[0];
-    else if (strcmp(ext, types_arr[txt]) == 0) return content_types[1];
-    else if (strcmp(ext, types_arr[jpeg]) == 0) return content_types[2];
-    else if (strcmp(ext, types_arr[jpg]) == 0) return content_types[2];
-    else if (strcmp(ext, types_arr[gif]) == 0) return content_types[3];
-  }
-  // TODO: Figure out what happens when recieving a unsupported extension
-  // Current behavior is returning plaintext type
-  return content_types[1];
-}
-
-// IN: file descriptor of file and socket to send to
-// OUT: total number of bytes written to the socket
-char* sendFile(int fd, struct stat fd_stat) {
-  char* buf = malloc(sizeof(char) * (fd_stat.st_size + 1));
-  int bytes_read;
-  memset(buf, 0, sizeof(char) * (fd_stat.st_size + 1));
-  bytes_read = read(fd, buf, fd_stat.st_size);
-  buf[fd_stat.st_size + 1] = '\0';
   
-  return buf;
+  int length = strlen(filename);
+  int dot_index = -1;
+
+  for (int i = length - 1; i >= 0; i--) {
+    if (filename[i] == '.') {
+      dot_index = i;
+      break;
+    }
+  }
+
+  if (dot_index != -1) {
+    int file_extension_length = length - dot_index;
+    ext = malloc(sizeof(char) * file_extension_length);
+    memset(ext, 0, sizeof(char) * file_extension_length);
+  
+    strncpy(ext, dot_index + filename + 1, file_extension_length - 1);
+  }
+    
+  if (ext != NULL) {
+    if (strcmp(ext, types_arr[html]) == 0)
+      return content_types[0];
+    else if (strcmp(ext, types_arr[htm]) == 0)
+      return content_types[0];
+    else if (strcmp(ext, types_arr[txt]) == 0)
+      return content_types[1];
+    else if (strcmp(ext, types_arr[jpeg]) == 0)
+      return content_types[2];
+    else if (strcmp(ext, types_arr[jpg]) == 0)
+      return content_types[2];
+    else if (strcmp(ext, types_arr[gif]) == 0)
+      return content_types[3];
+  }
+  // file extension not recognized or not file extension, so give as binary data
+  return content_types[4];
 }
 
 // IN: file descriptor of file and socket to send to
 void sendResponse(char* filename, int fd, struct stat fd_stat,int send_sock) {
   // Get file type
   char* type = getFiletype(filename);
-  char* status;
+  char* status = NULL;
   // Get status code
+
   // TODO: Maybe implement the other error codes
-  if (fd < 0) status = status_arr[notfound];
-  else status = status_arr[ok];
+  if (fd < 0) {
+    status = status_arr[notfound];
+    if ((fd = open("404.html", O_RDONLY)) < 0) {
+      error("ERROR unable to open 404 file");
+    }
+    fstat(fd, &fd_stat);
+    type = content_types[0];
+  } else {
+    status = status_arr[ok];
+  }
+  
   // Get the date
   time_t cur_time;
-  char cur_time_buf[52];
   struct tm* cur_tm_info;
   time(&cur_time);
   cur_tm_info = gmtime(&cur_time);
+
+  char cur_time_buf[52];
+  memset(cur_time_buf, 0, 52);
   strftime(cur_time_buf, 52, "%a,%e %b %G %T GMT", cur_tm_info);
+  
   // Get the last modified time
   char file_time_buf[52];
+  memset(file_time_buf, 0, 52);
   struct tm* file_tm_info;
   file_tm_info = gmtime(&(fd_stat.st_ctime));
   strftime(file_time_buf, 52, "%a,%e %b %G %T GMT", file_tm_info);
@@ -222,7 +284,7 @@ void sendResponse(char* filename, int fd, struct stat fd_stat,int send_sock) {
   // If the file exists
   if (fd > 0) {
     sprintf(msg_buf,
-	    "HTTP/1.1 %s\r\nConnection: keep-alive\r\nDate: %s\r\nServer: Ubuntu\r\nLast-Modified: %s\r\nContent-Length: %ld\r\nContent-Type: %s\r\n\r\n",
+	    "HTTP/1.1 %s\r\nConnection: close\r\nDate: %s\r\nServer: Ubuntu\r\nLast-Modified: %s\r\nContent-Length: %ld\r\nContent-Type: %s\r\n\r\n",
 	    status, cur_time_buf, file_time_buf, fd_stat.st_size, type);
   }
   else {
@@ -236,17 +298,21 @@ void sendResponse(char* filename, int fd, struct stat fd_stat,int send_sock) {
   // Send response
   write (send_sock, msg_buf, strlen(msg_buf));
   // Send file
-  if (fd > 0) {
   char file_buf[CHUNK_SIZE];
   memset(file_buf, 0, CHUNK_SIZE);
   long bytes_read;
-  while ((bytes_read = read(fd, file_buf, 1)) != 0) {
-    if (bytes_read > 0)
-      write(send_sock, file_buf, bytes_read);
-    else
-      error("Error when reading file\n");
+  if (fd > 0) {
+    while ((bytes_read = read(fd, file_buf, CHUNK_SIZE)) != 0) {
+      if (bytes_read > 0) {
+	if (write(send_sock, file_buf, bytes_read) < 0) {
+	  error("Error when writing to file\n");
+	}
+      }	else {
+	error("Error when reading file\n");
+      }
+    }
   }
-  }
+  close(fd);
 }
 
 int main(int argc, char *argv[]) {
@@ -284,10 +350,8 @@ int main(int argc, char *argv[]) {
   listen(listen_sock_fd, 5);
 
   // Continuously accept connections
-  int bytes_read, bytes_written = 0;
+  int bytes_read = 0;
   char msg_buf[CHUNK_SIZE];
-  char* html_msg = NULL;
-  char* file_buf = NULL;
   char* filename = NULL;
   
   int fd = -1;
@@ -301,24 +365,25 @@ int main(int argc, char *argv[]) {
       close(listen_sock_fd);
       close(connect_sock_fd);
       error("ERROR reading from socket\n");
+    } else if (bytes_read > 0) {
+      // print message
+      printf("%s\n", msg_buf);
+      //printf("%s\n", filename);
+      
+      // get the filename
+      filename = getFilename(msg_buf);
+      
+      printf("%s\n", filename);
+      
+      // open filename
+      fd = open_ci(filename, O_RDONLY);
+      
+      if (fd > 0) {
+	fstat(fd, &fd_stat);
+      } 
+      //reply to client
+      sendResponse(filename, fd, fd_stat, connect_sock_fd);
     }
-    
-    // print message
-    printf("%s\n", msg_buf);
-    //printf("%s\n", filename);
-
-    // get the filename
-    filename = getFilename(msg_buf);
-    
-    // open filename
-    fd = open_ci(filename, O_RDONLY);
-    
-    if (fd > 0) {
-      fstat(fd, &fd_stat);
-    }
-    //reply to client
-    sendResponse(filename, fd, fd_stat, connect_sock_fd);
-    
     shutdown(connect_sock_fd, 0);  // close connection
   }
   shutdown(listen_sock_fd, 0);
