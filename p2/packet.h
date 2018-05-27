@@ -24,22 +24,22 @@ struct Header {
 class Packet {
 public:
   // No data packet
-  Packet(int seq_num, int ack_num, short cwnd) {
+  Packet(int seq_num, int ack_num, short cwnd, bool isSyn, bool isFin) {
     header.seq_num = seq_num;
     header.ack_num = ack_num;
     header.cwnd = cwnd;
-    header.syn_bit = false;
-    header.fin_bit = false;
+    header.syn_bit = isSyn;
+    header.fin_bit = isFin;
     header.data_size = 0;
     memset(data, 0, BUF_SIZE);
   }
   // If sending data
-  Packet(int seq_num, int ack_num, short cwnd, const char* in_data, int data_size) {
+  Packet(int seq_num, int ack_num, short cwnd, const char* in_data, int data_size, bool isSyn, bool isFin) {
     header.seq_num = seq_num;
     header.ack_num = ack_num;
     header.cwnd = cwnd;
-    header.syn_bit = false;
-    header.fin_bit = false;
+    header.syn_bit = isSyn;
+    header.fin_bit = isFin;
     memset(data, 0, BUF_SIZE);
     if (data_size > BUF_SIZE) {
       fprintf(stderr, "Could not create packet\n");
@@ -106,6 +106,3 @@ private:
   char data[BUF_SIZE];
 };
 
-class Con_Manager {
-  
-};

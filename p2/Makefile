@@ -1,7 +1,18 @@
-Default:
-	g++ -std=c++11 -g -o client client.cpp
-	g++ -std=c++11 -g -o server server.cpp
-client:
-	g++ -std=c++11 -g -o client client.cpp
+#Makefile for our project
+
+CC = g++
+CFLAGS = -g -Wall -Wextra -std=c++11
+
+default: client server
+
 server:
-	g++ -std=c++11 -g -o server server.cpp
+	$(CC) $(CFLAGS) server.cpp -o $@
+
+client:
+	$(CC) $(CFLAGS) client.cpp -o $@
+
+dist:
+	tar -z -cf 204747283.904771873.tar.gz server.cpp client.cpp constants.h Makefile packet.h connman.h README
+
+clean:
+	rm -f *.o *.so *.tar.gz server client
