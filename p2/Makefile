@@ -1,7 +1,7 @@
 #Makefile for our project
 
 CC = g++
-CFLAGS = -g -Wall -Wextra -std=c++11
+CFLAGS = -g -Wpointer-arith -Wall -Wextra -std=c++11 -pthread
 
 default: client server
 
@@ -16,3 +16,6 @@ dist:
 
 clean:
 	rm -f *.o *.so *.tar.gz server client
+
+pls:
+	make clean && make

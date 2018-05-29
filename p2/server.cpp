@@ -63,5 +63,21 @@ int main (int argc, char* argv[]) {
     exit(1);
   }
   
+  // Listen for the initial file request
+  Packet request = reliableConnection.receivePacket(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr));
+  char* filename = request.p_data();
+
+  // Send file
+  reliableConnection.sendFile(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr), filename);
+
+  // FIN procedure
+  // Sending the FIN Packet
+  reliableConnection.sendFin(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr));
+  // Receive the FINACK 
+  Packet fa_packet =
+    reliableConnection.receivePacket(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr));
+  if (fa_packet.is_fin()) {
+    close (sockfd);
+  }
   
 }

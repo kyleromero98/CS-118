@@ -48,7 +48,12 @@ int main (int argc, char* argv[]) {
     close(sockfd);
     exit(1);
   }
+
+  reliableConnection.receiveFile(sockfd, (struct sockaddr*)&servaddr, sizeof(servaddr), filename);
+
+  // FIN Procedure
+  // Send FINACK
+  reliableConnection.sendFin(sockfd, (struct sockaddr*)&servaddr, sizeof(servaddr));  
   
   close(sockfd);
-  
 }
