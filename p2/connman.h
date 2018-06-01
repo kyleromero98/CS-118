@@ -141,6 +141,7 @@ public:
     int filefd = -1;
     int bytes_read = -1;
     Packet *r_packet = NULL;
+    cwnd_base = seq_num;
 
     // open the file that we need to read
     if ((filefd = open(filename, O_RDONLY)) < 0) {
@@ -181,6 +182,8 @@ public:
 	    while (iter != p_list.end()){
 	      // checking the sequence numbers
 	      if (iter->packet->h_seq_num() == r_packet->h_ack_num() - iter->packet->packet_size()) {
+		cwnd_base = iter->packet->h_seq_num() + iter->packet->packet_size();
+		fprintf(stderr, "cwnd_base = %d\n", cwnd_base);
 		free(iter->packet);
 		iter = p_list.erase(iter);
 	      } else {
@@ -212,7 +215,7 @@ public:
 	}
 	
 	// send out new packets until fill up the cwnd
-	while (p_list.empty() || seq_num < getCwndBase() + cwnd) {
+	while (p_list.empty() || seq_num < cwnd_base + cwnd) {
 	  // read next group of bytes from file
 	  memset(file_buf, 0, BUF_SIZE);
 	  bytes_read = read(filefd, file_buf, BUF_SIZE);
@@ -417,9 +420,4 @@ private:
 
   // stores unACKed packets in case we need to retransmit
   std::list<packet_data> p_list;
-
-  uint32_t getCwndBase() {
-    p_list.sort(compTime);
-    return p_list.front().packet->h_seq_num();
-  }
 };
