@@ -2,3 +2,9 @@ Jair Hinojosa, 904771873
 Kyle Romero, 204747283
 
 This submission contains the source code, README, and Makefile for our Project 2 for CS 118.
+
+TODO:
+Test retransmissions
+Add FIN ACKing of last packet (Cade and Amit said they got marked off for this)
+Implement timeouts of SYN/FIN procedure
+Extra credit
