@@ -1,9 +1,11 @@
 // connection manager stuff
 // TODO:
 //       Check if we need to be memset'ing the reinterpreted casts?
-//       Change window to act more like selective repeat
-//       Implement FIN ACKing of last packet
+//       Implement FIN procedure
+//       Have FIN procedure go after full file is ACKed
+//       Implement window stuff
 //       Implement timeout stuff
+//       Check with book that sequence num/ack num are set correctly 
 
 #include <cstdlib>
 #include <stdio.h>

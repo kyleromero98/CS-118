@@ -52,7 +52,7 @@ int main (int argc, char* argv[]) {
       exit(1);
     }
 
-  ConnectionManager reliableConnection;
+  ConnectionManager reliableConnection(true);
   if (!reliableConnection.listen(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr))) {
     fprintf(stderr, "Could not listen on socket for client\n");
     exit(1);
@@ -68,11 +68,14 @@ int main (int argc, char* argv[]) {
   char* filename = request.p_data();
 
   // Send file
-  reliableConnection.sendFile(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr), filename);
+  if (!reliableConnection.sendFile(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr), filename)) {
+    fprintf(stderr, "Failed to send file\n");
+  }
 
   // FIN procedure
   // Sending the FIN Packet
   reliableConnection.sendFin(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr));
+  
   // Receive the FINACK 
   Packet fa_packet =
     reliableConnection.receivePacket(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr));

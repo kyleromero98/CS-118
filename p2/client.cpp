@@ -18,6 +18,7 @@
 int main (int argc, char* argv[]) {
   int sockfd;
   char *filename;
+  std::string output = "received.data";
   struct sockaddr_in servaddr;
 
   // Parse args
@@ -42,14 +43,14 @@ int main (int argc, char* argv[]) {
   servaddr.sin_port = htons(PORTNO);
   servaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-  ConnectionManager reliableConnection;
+  ConnectionManager reliableConnection(false);
   if (reliableConnection.connect(sockfd, (struct sockaddr*)&servaddr, sizeof(servaddr), filename) == false) {
     fprintf(stderr, "Failed to establish reliable connection\n");
     close(sockfd);
     exit(1);
   }
 
-  reliableConnection.receiveFile(sockfd, (struct sockaddr*)&servaddr, sizeof(servaddr), filename);
+  reliableConnection.receiveFile(sockfd, (struct sockaddr*)&servaddr, sizeof(servaddr), output.c_str());
 
   // FIN Procedure
   // Send FINACK

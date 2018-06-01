@@ -58,47 +58,47 @@ public:
       }
     }
   }
-  bool valid_seq() {
+  bool valid_seq() const {
     return (header.seq_num >= 0 && header.seq_num <= 30720);
   }
-  bool valid_ack() {
+  bool valid_ack() const {
     return (header.seq_num >= 0 && header.seq_num <= 30720);
   }
-  bool is_syn() {
+  bool is_syn() const {
     return header.syn_bit;
   }
-  bool is_fin() {
+  bool is_fin() const {
     return header.fin_bit;
   }
-  int data_size() {
+  int data_size() const {
     return header.data_size;
   }
-  int packet_size() {
+  int packet_size() const {
     return HEADER_SIZE + header.data_size;
   }
   // Accessor Functions
-  int h_seq_num() {
+  int h_seq_num() const {
     return header.seq_num;
   }
-  int h_ack_num() {
+  int h_ack_num() const {
     return header.ack_num;
   }
-  short h_cwnd() {
+  short h_cwnd() const {
     return header.cwnd;
   }
-  bool h_syn() {
+  bool h_syn() const {
     return header.syn_bit;
   }
-  bool h_fin() {
+  bool h_fin() const {
     return header.fin_bit;
   }
-  int h_data_size() {
+  int h_data_size() const {
     return header.data_size;
   }
   char* p_data() {
     return data;
   }
-  Header h_header() {
+  Header h_header() const {
     return header;
   }
 private:
