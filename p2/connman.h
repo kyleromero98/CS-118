@@ -36,7 +36,6 @@ public:
     is_server = isServer;
   }
 
-  // WARNING THIS CODE IS SUSPECT MIGHT CAUSE BUGS
   // compares the the timing of two packets
   // returns true if second arrived later than the first
   static bool compTime (packet_data first, packet_data second) {
@@ -194,7 +193,7 @@ public:
 	
 	
 	// send out new packets until fill up the cwnd
-	while (seq_num <= cwnd_base + cwnd) {
+	while (p_list.empty() || seq_num < getCwndBase() + cwnd) {
 	  // read next group of bytes from file
 	  bytes_read = read(filefd, file_buf, BUF_SIZE);
 
@@ -218,7 +217,6 @@ public:
 	  // add to list of outstanding packets
 	  p_list.push_back(data);
 	}
-	update_cwnd();
       }
 
       // the file is done being sent, but we cant start FIN until all outstanding packets are ACKed
@@ -247,6 +245,9 @@ public:
 	      }
 	    }
 	  }
+	}
+	if (p_list.empty()) {
+	  break;
 	}
       }
     }
@@ -424,6 +425,6 @@ private:
 
   uint32_t getCwndBase() {
     p_list.sort(compTime);
-    return p_list.front()->packet->h_seq_num();
+    return p_list.front().packet->h_seq_num();
   }
 };
