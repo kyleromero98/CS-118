@@ -1,6 +1,5 @@
 // connection manager stuff
 // TODO:
-//       Check if we need to be memset'ing the reinterpreted casts?
 //       Change window to act more like selective repeat
 //       Implement FIN ACKing of last packet
 //       Implement timeout stuff
@@ -20,6 +19,7 @@ public:
   // setting up stuff for timing
   typedef std::chrono::high_resolution_clock Time;
   typedef std::chrono::milliseconds ms;
+  typedef std::chrono::duration<float> fsec;
   
   // packet data struct for storing packet data
   struct packet_data {
@@ -31,16 +31,16 @@ public:
   ConnectionManager(bool isServer) {
     seq_num = -1;
     ack_num = -1;
-    window_base = -1;
     cwnd = WINDOW_SIZE;
     timeout = RTO; // in ms
     is_server = isServer;
   }
 
-  // compares the sequence number of two packets
-  // returns true if second is greater than first
-  static bool compSeqnum (packet_data first, packet_data second) {
-    return (first.packet->h_seq_num() < second.packet->h_seq_num());
+  // WARNING THIS CODE IS SUSPECT MIGHT CAUSE BUGS
+  // compares the the timing of two packets
+  // returns true if second arrived later than the first
+  static bool compTime (packet_data first, packet_data second) {
+    return (second.time_sent > first.time_sent);
   }
 
   // updates the sequence number by bytes, wraps around
@@ -194,7 +194,7 @@ public:
 	
 	
 	// send out new packets until fill up the cwnd
-	while (true) {
+	while (seq_num <= cwnd_base + cwnd) {
 	  // read next group of bytes from file
 	  bytes_read = read(filefd, file_buf, BUF_SIZE);
 
@@ -218,6 +218,7 @@ public:
 	  // add to list of outstanding packets
 	  p_list.push_back(data);
 	}
+	update_cwnd();
       }
 
       // the file is done being sent, but we cant start FIN until all outstanding packets are ACKed
@@ -300,7 +301,7 @@ public:
 
     // If the list is not empty, add the out of order packets to the file
     if (!p_list.empty()) {
-      p_list.sort(compSeqnum);
+      p_list.sort(compTime);
       std::list<packet_data>::iterator it;
       for (it = p_list.begin(); it != p_list.end(); it++) {
 	write(fd, it->packet->p_data(), it->packet->h_data_size());
@@ -409,16 +410,20 @@ private:
   // current state variables
   int seq_num;
   int ack_num;
-  // curent congestion window
+  // curent congestion window size
   uint32_t cwnd;
   // current timeout; always 500ms
   int timeout;
   // the last unACKed packet seq_num
-  int window_base;
   bool con_idle;
   // just to tell if we are server or not
   bool is_server;
 
   // stores unACKed packets in case we need to retransmit
   std::list<packet_data> p_list;
+
+  uint32_t getCwndBase() {
+    p_list.sort(compTime);
+    return p_list.front()->packet->h_seq_num();
+  }
 };
