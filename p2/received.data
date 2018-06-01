@@ -1,11 +1,9 @@
 // connection manager stuff
 // TODO:
 //       Check if we need to be memset'ing the reinterpreted casts?
-//       Implement FIN procedure
-//       Have FIN procedure go after full file is ACKed
-//       Implement window stuff
+//       Change window to act more like selective repeat
+//       Implement FIN ACKing of last packet
 //       Implement timeout stuff
-//       Check with book that sequence num/ack num are set correctly 
 
 #include <cstdlib>
 #include <stdio.h>
@@ -13,58 +11,78 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <list>
-#include <thread>
 #include <poll.h>
+#include <chrono>
 
 class ConnectionManager {
 public:
+
+  // setting up stuff for timing
+  typedef std::chrono::high_resolution_clock Time;
+  typedef std::chrono::milliseconds ms;
+  
+  // packet data struct for storing packet data
+  struct packet_data {
+    Packet *packet;
+    Time::time_point time_sent;
+  };
+    
   // established connection and exchanges SYN
   ConnectionManager(bool isServer) {
     seq_num = -1;
     ack_num = -1;
+    window_base = -1;
     cwnd = WINDOW_SIZE;
     timeout = RTO; // in ms
     is_server = isServer;
   }
 
-  static bool compSeqnum (Packet first, Packet second) {
-    return (first.h_seq_num() < second.h_seq_num());
+  // compares the sequence number of two packets
+  // returns true if second is greater than first
+  static bool compSeqnum (packet_data first, packet_data second) {
+    return (first.packet->h_seq_num() < second.packet->h_seq_num());
   }
 
+  // updates the sequence number by bytes, wraps around
   void updateSeqnum (int bytes) {
-    //printf("Old Seqnum %d //", seq_num);
     seq_num = (seq_num + bytes) % (MAX_SEQNUM + 1);
-    //printf(" New Seqnum %d\n", seq_num);
   }
 
+  // updates the ackNum by bytes, wraps around
   void updateAcknum (int bytes) {
-    //printf("Old Acknum %d //", ack_num);
     ack_num = (ack_num + bytes) % (MAX_SEQNUM + 1);
-    //printf(" New Acknum %d\n", ack_num);
   }
 
+  // sends an ACK packet
   void sendAck (int sockfd, struct sockaddr *addr_info, size_t addr_len) {
     Packet s_packet(seq_num, ack_num, cwnd, false, false);
-    sendPacket (sockfd, addr_info, addr_len, s_packet);
+    sendPacket (sockfd, addr_info, addr_len, &s_packet);
   }
 
+  // sends a FIN packet
   void sendFin (int sockfd, struct sockaddr *addr_info, size_t addr_len) {
     Packet f_packet(seq_num, ack_num, cwnd, false, true);
-    sendPacket (sockfd, addr_info, addr_len, f_packet);
+    sendPacket (sockfd, addr_info, addr_len, &f_packet);
   }
-  
-  Packet receivePacket (int sockfd, struct sockaddr * addr_info, size_t addr_len) {
-    // declare and set buffer
+
+  // will receive a packet
+  Packet* receivePacket (int sockfd, struct sockaddr * addr_info, size_t addr_len) {
+
+    // declare and init buffer
     char r_pstream[PACKET_SIZE];
     memset(r_pstream, 0, PACKET_SIZE);
+
+    // initialize receiving packet
     Packet* r_packet = NULL;
     
-    int bytes_recv = recvfrom (sockfd, (char*) r_pstream, PACKET_SIZE, MSG_WAITALL, addr_info, (unsigned int*)&addr_len);
+    int bytes_recv = recvfrom (sockfd, r_pstream, PACKET_SIZE, MSG_WAITALL, addr_info, (unsigned int*)&addr_len);
     
     if (bytes_recv < 0) {
-      perror("Error with recvfrom");
-      exit(-1);
+      perror("Error with recvfrom() in receivePacket()");
+      exit(1);
     }
+
+    // reinterpret the received bytes
     r_packet = reinterpret_cast<Packet*>(r_pstream);
         
     // log the received packet
@@ -73,52 +91,68 @@ public:
     if (!(r_packet->is_syn() /* || r_packet->is_fin() */))
       updateAcknum(r_packet->packet_size());
 
-    return (*r_packet);
+    return r_packet;
   }
 
-  bool sendPacket (int sockfd, const struct sockaddr *addr_info, size_t addr_len, Packet s_packet) {
+  // will send a packet
+  bool sendPacket (int sockfd, const struct sockaddr *addr_info, size_t addr_len, Packet *s_packet) {
     // cast to packet
-    char* s_pstream = reinterpret_cast<char*> (&s_packet);
+    char* s_pstream = reinterpret_cast<char*> (s_packet);
 
-    // Send the data
-    int send_bytes = s_packet.packet_size();
+    // initialize how much we need to send and the bytes written
+    int send_bytes = s_packet->packet_size();
     int bytes_written = -1;
-    void *tracker = s_pstream;
+
+    // pointer to keep track of where we are
+    char *tracker = s_pstream;
 
     // loop to make sure all data gets sent
     while (send_bytes > 0) {
+      // send the data
       bytes_written = sendto(sockfd, (const char*) tracker, send_bytes, MSG_CONFIRM, addr_info, addr_len);
+
+      // check for errors
       if (bytes_written < 0) {
 	perror("Error writing to socket\n");
 	exit(-1);
       }
+
+      // debugging thing
+      if (bytes_written != send_bytes) {
+	fprintf(stderr, "THIS MESSAGE MEANS YOU NEED THE THING\n");
+      }
+      
+      // update meta
       send_bytes -= bytes_written;
       tracker += bytes_written;
     }
         
     // Log the sent packet
-    logSentPacket(s_packet.h_seq_num(), false, s_packet.is_syn(), s_packet.is_fin());
+    logSentPacket(s_packet->h_seq_num(), false, s_packet->is_syn(), s_packet->is_fin());
 
     // Update seqnum
-    updateSeqnum(s_packet.packet_size());
+    updateSeqnum(s_packet->packet_size());
 
     return true;
   }
   
   bool sendFile (int sockfd, struct sockaddr *addr_info, size_t addr_len, char *filename) {
+    // set this to initial values
     int filefd = -1;
     int bytes_read = -1;
+    Packet *r_packet = NULL;
 
+    // open the file that we need to read
     if ((filefd = open(filename, O_RDONLY)) < 0) {
       perror("Failed to open file");
       return false;
-    }
-    else {
+    } else {
+      // init our data buffer
       char file_buf[BUF_SIZE];
       memset(file_buf, 0, BUF_SIZE);
-
+      
       // set up the polling
-
+      
       struct pollfd polldata[1];
 
       polldata[0].fd = sockfd;
@@ -131,6 +165,7 @@ public:
       while (bytes_read != 0) {
        
 	// poll for ACKs from client
+	// polling for 10 ms and from 1 fd
 	if ((poll_status = poll(polldata, 1, 10)) < 0) {
 	  perror("Polling from client error");
 	  return false;
@@ -139,29 +174,27 @@ public:
 	  // we got an event from the client
 	  if (polldata[0].revents & POLLIN) {
 	    // receive the packet
-	    Packet r_packet = receivePacket(sockfd, addr_info, addr_len);
-
+	    r_packet = receivePacket(sockfd, addr_info, addr_len);
+	    
 	    // check to see if the ACK matches any outstanding packets
-	    std::list<Packet>::const_iterator iter = p_list.begin();
+	    std::list<packet_data>::const_iterator iter = p_list.begin();
 	    while (iter != p_list.end()){
-	      //fprintf(stderr, "Received packet ack num: %d\n", r_packet.h_ack_num());
-	      //fprintf(stderr, "Outstanding packet seq num: %d\n", iter->h_seq_num());
-	      if (iter->h_seq_num() == r_packet.h_ack_num() - iter->packet_size()) {
+	      // checking the sequence numbers
+	      if (iter->packet->h_seq_num() == r_packet->h_ack_num() - iter->packet->packet_size()) {
+		free(iter->packet);
 		iter = p_list.erase(iter);
 	      } else {
 		++iter;
 	      }
-	      updateSize();
 	    }
 	  }
 	}
 	
 	// done polling so now we check the timeouts
-	// insert timeout code here
 	
-	// send out new packets until we hit the cwnd
-	while (out_packet_size <= cwnd - PACKET_SIZE) {
-
+	
+	// send out new packets until fill up the cwnd
+	while (true) {
 	  // read next group of bytes from file
 	  bytes_read = read(filefd, file_buf, BUF_SIZE);
 
@@ -173,19 +206,23 @@ public:
 	    exit(1);
 	  }
 
-	  // make and send the packets
-	  Packet s_packet(seq_num, ack_num, cwnd, file_buf, bytes_read, false, false);
+	  // initialize the packet
+	  Packet *s_packet = new Packet(seq_num, ack_num, cwnd, file_buf, bytes_read, false, false);
+	  packet_data data;
+	  data.packet = s_packet;
+	  data.time_sent = Time::now();
+
+	  // send the packet
 	  sendPacket(sockfd, (const struct sockaddr*)addr_info, addr_len, s_packet);
 
 	  // add to list of outstanding packets
-	  p_list.push_back(s_packet);
-	  updateSize();
+	  p_list.push_back(data);
 	}
       }
 
       // the file is done being sent, but we cant start FIN until all outstanding packets are ACKed
       // therefore, we keep polling
-      while (out_packet_size != 0) {
+      while (true) {
 	
 	// poll for ACKs from client
 	if ((poll_status = poll(polldata, 1, 10)) < 0) {
@@ -196,17 +233,17 @@ public:
 	  // we got an event from the client
 	  if (polldata[0].revents & POLLIN) {
 	    // receive the packet
-	    Packet r_packet = receivePacket(sockfd, addr_info, addr_len);
+	    r_packet = receivePacket(sockfd, addr_info, addr_len);
 	    
 	    // check to see if the ACK matches any outstanding packets
-	    std::list<Packet>::const_iterator iter = p_list.begin();
+	    std::list<packet_data>::const_iterator iter = p_list.begin();
 	    while (iter != p_list.end()){
-	      if (iter->h_seq_num() == r_packet.h_ack_num() - iter->packet_size()) {
+	      if (iter->packet->h_seq_num() == r_packet->h_ack_num() - iter->packet->packet_size()) {
+		free(iter->packet);
 		iter = p_list.erase(iter);
 	      } else {
 		++iter;
 	      }
-	      updateSize();
 	    }
 	  }
 	}
@@ -216,6 +253,8 @@ public:
   }
 
   bool receiveFile (int sockfd, struct sockaddr *addr_info, size_t addr_len, const char *filename) {
+
+    // opens the file for writing to 'received.data'
     int fd = open(filename, O_CREAT | O_WRONLY, 0666);
 
     char r_pstream[PACKET_SIZE];
@@ -231,6 +270,8 @@ public:
 	  perror("Error with recvfrom");
 	  exit(-1);
 	}
+
+	// set the stream to a packet
 	r_packet = reinterpret_cast<Packet*>(r_pstream);
 
 	// Log received packet
@@ -241,8 +282,11 @@ public:
 	
 	// Add the received packet into the linked list if it was not expected
 	if (r_packet->h_seq_num() != ack_num) {
-	  p_list.push_back(*r_packet);
-	  //fprintf(stderr, "out of order packet\n");
+	  packet_data data;
+	  data.packet = r_packet;
+	  data.time_sent = Time::now();
+	  
+	  p_list.push_back(data);
 	}
 	// Otherwise write the data to the file
 	else {
@@ -257,10 +301,10 @@ public:
     // If the list is not empty, add the out of order packets to the file
     if (!p_list.empty()) {
       p_list.sort(compSeqnum);
-      std::list<Packet>::iterator it;
+      std::list<packet_data>::iterator it;
       for (it = p_list.begin(); it != p_list.end(); it++) {
-	write(fd, (*it).p_data(), (*it).h_data_size());
-	updateAcknum((*it).h_data_size());
+	write(fd, it->packet->p_data(), it->packet->h_data_size());
+	updateAcknum(it->packet->h_data_size());
       }
     }
 
@@ -279,42 +323,39 @@ public:
 
     // create dataless SYN packet
     Packet s_packet(seq_num, 0, cwnd, true, false);
-
-    sendPacket(fd, addr_info, addr_len, s_packet);
+    sendPacket(fd, addr_info, addr_len, &s_packet);
     
     // Receive the SYNACK packet
-    
-    Packet r_packet = receivePacket(fd, addr_info, addr_len);
+    Packet *r_packet = receivePacket(fd, addr_info, addr_len);
 
-    if (r_packet.is_syn()) {
-      ack_num = (r_packet.h_seq_num() + HEADER_SIZE) % (MAX_SEQNUM + 1);
-      //printf("initial ack_num = %d\n", ack_num);
+    if (r_packet->is_syn()) {
+      ack_num = (r_packet->h_seq_num() + HEADER_SIZE) % (MAX_SEQNUM + 1);
     } else {
-      fprintf(stderr, "Received packet was not SYN");
+      perror("Received packet was not SYN");
       return false;
     }
 
     // Send the initial file request
     Packet req_packet(seq_num, ack_num, cwnd, filename, strlen(filename), false, false);
-    sendPacket(fd, addr_info, addr_len, req_packet);
+    sendPacket(fd, addr_info, addr_len, &req_packet);
 
     return true;
   }
   
   bool listen(int sockfd, struct sockaddr *addr_info, size_t addr_len) {
     if (ack_num != -1 || seq_num != -1) {
-      fprintf(stderr, "Failed to listen(), sequence number already generated");
+      perror("Failed to listen(), sequence number already generated");
       return false;
     }
 
-    Packet r_packet = receivePacket(sockfd, addr_info, addr_len);
+    Packet *r_packet = receivePacket(sockfd, addr_info, addr_len);
     
-    if (r_packet.is_syn()) {
+    if (r_packet->is_syn()) {
       srand (time(NULL) + 1);
       seq_num = rand() % (MAX_SEQNUM + 1);
-      ack_num = (r_packet.h_seq_num() + 16) % (MAX_SEQNUM + 1);
+      ack_num = (r_packet->h_seq_num() + 16) % (MAX_SEQNUM + 1);
     } else {
-      fprintf(stderr, "Received packet was not SYN");
+      perror("Received packet was not SYN");
       return false;
     }
     return true;
@@ -328,8 +369,7 @@ public:
     
     // create dataless SYN packet
     Packet s_packet(seq_num, ack_num, cwnd, true, false);
-    
-    sendPacket(sockfd, addr_info, addr_len, s_packet);
+    sendPacket(sockfd, addr_info, addr_len, &s_packet);
     
     return true;
   }
@@ -369,22 +409,16 @@ private:
   // current state variables
   int seq_num;
   int ack_num;
+  // curent congestion window
   uint32_t cwnd;
-  uint32_t out_packet_size;
+  // current timeout; always 500ms
   int timeout;
+  // the last unACKed packet seq_num
   int window_base;
   bool con_idle;
+  // just to tell if we are server or not
   bool is_server;
-  std::list<Packet> p_list;
 
-  void updateSize() {
-    int counter = 0;
-    std::list<Packet>::const_iterator iter = p_list.begin();
-    while (iter != p_list.end()) {
-      //check size of each packet and add it to counter
-      counter += iter->packet_size();
-      iter++;
-    }
-    out_packet_size = counter;
-  }
+  // stores unACKed packets in case we need to retransmit
+  std::list<packet_data> p_list;
 };
