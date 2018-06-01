@@ -1,8 +1,9 @@
 // connection manager stuff
 // TODO:
-//       Change window to act more like selective repeat
-//       Implement FIN ACKing of last packet
-//       Implement timeout stuff
+//       Test retransmissions
+//       Add FIN ACKing of last packet
+//       Implement timeouts of SYN/FIN procedure
+//       Fix wraparound issue
 
 #include <cstdlib>
 #include <stdio.h>
@@ -55,13 +56,13 @@ public:
   // sends an ACK packet
   void sendAck (int sockfd, struct sockaddr *addr_info, size_t addr_len) {
     Packet s_packet(seq_num, ack_num, cwnd, false, false);
-    sendPacket (sockfd, addr_info, addr_len, &s_packet);
+    sendPacket (sockfd, addr_info, addr_len, &s_packet, false);
   }
 
   // sends a FIN packet
   void sendFin (int sockfd, struct sockaddr *addr_info, size_t addr_len) {
     Packet f_packet(seq_num, ack_num, cwnd, false, true);
-    sendPacket (sockfd, addr_info, addr_len, &f_packet);
+    sendPacket (sockfd, addr_info, addr_len, &f_packet, false);
   }
 
   // will receive a packet
@@ -94,7 +95,7 @@ public:
   }
 
   // will send a packet
-  bool sendPacket (int sockfd, const struct sockaddr *addr_info, size_t addr_len, Packet *s_packet) {
+  bool sendPacket (int sockfd, const struct sockaddr *addr_info, size_t addr_len, Packet *s_packet, bool isRetransmit) {
     // cast to packet
     char* s_pstream = reinterpret_cast<char*> (s_packet);
 
@@ -127,7 +128,7 @@ public:
     }
         
     // Log the sent packet
-    logSentPacket(s_packet->h_seq_num(), false, s_packet->is_syn(), s_packet->is_fin());
+    logSentPacket(s_packet->h_seq_num(), isRetransmit, s_packet->is_syn(), s_packet->is_fin());
 
     // Update seqnum
     updateSeqnum(s_packet->packet_size());
@@ -161,7 +162,7 @@ public:
       int poll_status = 0;
       
       // Read in the file into a buffer in increments of BUF_SIZE
-      while (bytes_read != 0) {
+      while (true) {
        
 	// poll for ACKs from client
 	// polling for 10 ms and from 1 fd
@@ -189,12 +190,32 @@ public:
 	  }
 	}
 	
-	// done polling so now we check the timeouts
-	
+	//now we check the timeouts by iterating through outstanding packets
+	std::list<packet_data>::const_iterator iter = p_list.begin();
+	while (iter != p_list.end()){
+	  // get current time
+	  auto current_time = Time::now();
+
+	  fsec sec_duration = current_time - iter->time_sent;
+	  ms ms_duration = std::chrono::duration_cast<ms>(sec_duration);
+	  
+	  if (ms_duration.count() > timeout) {
+	    sendPacket(sockfd, (const struct sockaddr*)addr_info, addr_len, iter->packet, true);
+	    packet_data data;
+	    data.packet = iter->packet;
+	    data.time_sent = Time::now();
+	    iter = p_list.erase(iter);
+	    p_list.push_back(data);
+	  } else {
+	    ++iter;
+	  }
+	}
 	
 	// send out new packets until fill up the cwnd
-	while (p_list.empty() || seq_num < getCwndBase() + cwnd) {
+	while (p_list.empty() || seq_num < getCwndBase() + cwnd
+	       || (((getCwndBase() + cwnd) != ((getCwndBase() + cwnd) % (MAX_SEQNUM + 1))) && seq_num < MAX_SEQNUM)) {
 	  // read next group of bytes from file
+	  memset(file_buf, 0, BUF_SIZE);
 	  bytes_read = read(filefd, file_buf, BUF_SIZE);
 
 	  // check for error while reading from file
@@ -212,41 +233,13 @@ public:
 	  data.time_sent = Time::now();
 
 	  // send the packet
-	  sendPacket(sockfd, (const struct sockaddr*)addr_info, addr_len, s_packet);
+	  sendPacket(sockfd, (const struct sockaddr*)addr_info, addr_len, s_packet, false);
 
 	  // add to list of outstanding packets
 	  p_list.push_back(data);
 	}
-      }
 
-      // the file is done being sent, but we cant start FIN until all outstanding packets are ACKed
-      // therefore, we keep polling
-      while (true) {
-	
-	// poll for ACKs from client
-	if ((poll_status = poll(polldata, 1, 10)) < 0) {
-	  perror("Polling from client error");
-	  return false;
-	} else if (poll_status >= 1) {
-	  
-	  // we got an event from the client
-	  if (polldata[0].revents & POLLIN) {
-	    // receive the packet
-	    r_packet = receivePacket(sockfd, addr_info, addr_len);
-	    
-	    // check to see if the ACK matches any outstanding packets
-	    std::list<packet_data>::const_iterator iter = p_list.begin();
-	    while (iter != p_list.end()){
-	      if (iter->packet->h_seq_num() == r_packet->h_ack_num() - iter->packet->packet_size()) {
-		free(iter->packet);
-		iter = p_list.erase(iter);
-	      } else {
-		++iter;
-	      }
-	    }
-	  }
-	}
-	if (p_list.empty()) {
+	if (bytes_read == 0 && p_list.empty()) {
 	  break;
 	}
       }
@@ -287,13 +280,16 @@ public:
 	  packet_data data;
 	  data.packet = r_packet;
 	  data.time_sent = Time::now();
-	  
+
 	  p_list.push_back(data);
 	}
 	// Otherwise write the data to the file
 	else {
 	  // Update ACK and write the data to a file
-	  write(fd, r_packet->p_data(), r_packet->h_data_size());
+	  fprintf(stderr, "%s\n", r_packet->p_data());
+	  if (write(fd, r_packet->p_data(), r_packet->h_data_size()) < 0) {
+	    perror("Error writing to file");
+	  }
 	  updateAcknum(r_packet->packet_size());
 	}
 	// Send ACK
@@ -325,7 +321,7 @@ public:
 
     // create dataless SYN packet
     Packet s_packet(seq_num, 0, cwnd, true, false);
-    sendPacket(fd, addr_info, addr_len, &s_packet);
+    sendPacket(fd, addr_info, addr_len, &s_packet, false);
     
     // Receive the SYNACK packet
     Packet *r_packet = receivePacket(fd, addr_info, addr_len);
@@ -339,7 +335,7 @@ public:
 
     // Send the initial file request
     Packet req_packet(seq_num, ack_num, cwnd, filename, strlen(filename), false, false);
-    sendPacket(fd, addr_info, addr_len, &req_packet);
+    sendPacket(fd, addr_info, addr_len, &req_packet, false);
 
     return true;
   }
@@ -371,7 +367,7 @@ public:
     
     // create dataless SYN packet
     Packet s_packet(seq_num, ack_num, cwnd, true, false);
-    sendPacket(sockfd, addr_info, addr_len, &s_packet);
+    sendPacket(sockfd, addr_info, addr_len, &s_packet, false);
     
     return true;
   }
@@ -413,6 +409,7 @@ private:
   int ack_num;
   // curent congestion window size
   uint32_t cwnd;
+  uint32_t cwnd_base;
   // current timeout; always 500ms
   int timeout;
   // the last unACKed packet seq_num

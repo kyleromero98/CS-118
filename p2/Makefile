@@ -15,7 +15,7 @@ dist:
 	tar -z -cf 204747283.904771873.tar.gz server.cpp client.cpp constants.h Makefile packet.h connman.h README
 
 clean:
-	rm -f *.o *.so *.tar.gz server client
+	rm -f *.o *.so *.tar.gz server client received.data
 
 pls:
 	make clean && make
