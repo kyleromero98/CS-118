@@ -1,4 +1,4 @@
-#Makefile for our project
+#Makefile for our CS118 P2
 
 CC = g++
 CFLAGS = -g -Wpointer-arith -Wsign-compare -Wall -Wextra -std=c++11 -pthread
