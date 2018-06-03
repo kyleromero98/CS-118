@@ -58,21 +58,22 @@ int main (int argc, char* argv[]) {
     exit(1);
   }
 
-  if (!reliableConnection.accept(sockfd, (const struct sockaddr *) &cliaddr, sizeof(cliaddr))) {
+  if (!reliableConnection.accept(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr))) {
     fprintf(stderr, "Failed to establish connection\n");
     exit(1);
   }
   
   // Listen for the initial file request
-  Packet *request = reliableConnection.receivePacket(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr));
-  char* filename = request->p_data();
+  //Packet *request = reliableConnection.receivePacket(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr));
+  //char* filename = request->p_data();
 
   // Send file
-  if (!reliableConnection.sendFile(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr), filename)) {
+  if (!reliableConnection.sendFile(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr))) {
     fprintf(stderr, "Failed to send file\n");
   }
 
   // FIN procedure
+  /*
   // Sending the FIN Packet
   reliableConnection.sendFin(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr));
   
@@ -81,5 +82,7 @@ int main (int argc, char* argv[]) {
   if (fa_packet->is_fin()) {
     close (sockfd);
   }
-  
+  */
+  reliableConnection.sendFin(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr));
+  close(sockfd);
 }
