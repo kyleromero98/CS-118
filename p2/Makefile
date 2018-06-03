@@ -1,7 +1,7 @@
 #Makefile for our project
 
 CC = g++
-CFLAGS = -g -Wpointer-arith -Wall -Wextra -std=c++11 -pthread
+CFLAGS = -g -Wpointer-arith -Wsign-compare -Wall -Wextra -std=c++11 -pthread
 
 default: client server
 

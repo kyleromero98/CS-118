@@ -13,6 +13,10 @@
 #include <list>
 #include <poll.h>
 #include <chrono>
+#include <iostream>
+#include <ctime>
+#include <iomanip>
+#include <string>
 
 class ConnectionManager {
 public:
@@ -56,16 +60,115 @@ public:
 
   // sends an ACK packet
   void sendAck (int sockfd, struct sockaddr *addr_info, size_t addr_len) {
-    Packet s_packet(seq_num, ack_num, cwnd, false, false);
-    sendPacket (sockfd, addr_info, addr_len, &s_packet, false);
+    Packet *s_packet = new Packet(seq_num, ack_num, cwnd, false, false);
+    sendPacket (sockfd, addr_info, addr_len, s_packet, false);
   }
 
-  // sends a FIN packet
-  void sendFin (int sockfd, struct sockaddr *addr_info, size_t addr_len) {
-    Packet f_packet(seq_num, ack_num, cwnd, false, true);
-    sendPacket (sockfd, addr_info, addr_len, &f_packet, false);
+  // client FIN procedure
+  void cli_fin (int sockfd, struct sockaddr *addr_info, size_t addr_len) {
+    Packet *f_packet = new Packet(seq_num, ack_num, cwnd, false, true);
+    sendPacket (sockfd, addr_info, addr_len, f_packet, false);
   }
 
+  // server FIN procedure
+  void serv_fin (int sockfd, struct sockaddr *addr_info, size_t addr_len) {
+    // Create FIN packet to send
+    Packet *f_packet = new Packet(seq_num, ack_num, cwnd, false, true);
+
+    // set up the polling
+      
+    struct pollfd polldata[1];
+
+    polldata[0].fd = sockfd;
+    polldata[0].events = POLLIN | POLLHUP | POLLERR;
+    polldata[0].revents = 0;
+    
+    int poll_status = 0;
+
+    bool recv_ack = false;
+    bool is_retransmit = false;
+    
+    // poll for ACKs from client
+    
+    while (true) {
+      // Send the initial packet
+      sendPacket(sockfd, addr_info, addr_len, f_packet, is_retransmit);
+
+      // Wait for one RTO
+      
+      if ((poll_status = poll(polldata, 1, RTO)) < 0) {
+	perror("Polling from client error");
+	exit(1);
+      }
+      else if (poll_status >= 1) {
+	// we got an event from the client
+	if (polldata[0].revents & POLLIN) {
+	  // receive the packet
+	  Packet* rp_packet = receivePacket(sockfd, addr_info, addr_len);
+	  
+	  Packet r_packet = (*rp_packet);
+
+	  // checking to see if the received packet is the FINACK
+	  if ((r_packet.is_fin()) &&
+	      ((f_packet->h_seq_num() ==
+	       r_packet.h_ack_num() - f_packet->packet_size() ||
+	       f_packet->h_seq_num() ==
+		(r_packet.h_ack_num() - f_packet->packet_size()) + MAX_SEQNUM + 1))) {
+	    updateAcknum(r_packet.packet_size());
+	    sendAck(sockfd, addr_info, addr_len);
+	    recv_ack = true;
+	    free(f_packet);
+	  }
+	}
+      }
+      
+      // If the ack was received, stop polling
+      if (recv_ack) {
+	break;
+      }
+      else {
+	is_retransmit = true;
+      }
+    }
+  }
+
+  // wait procedure after the server FIN procedure
+  void wait_fin (int sockfd, struct sockaddr *addr_info, size_t addr_len) {
+   
+    // set up the polling
+      
+    struct pollfd polldata[1];
+
+    polldata[0].fd = sockfd;
+    polldata[0].events = POLLIN | POLLHUP | POLLERR;
+    polldata[0].revents = 0;
+    
+    int poll_status = 0;
+    
+    // poll for extra packets from client
+    
+    // Wait for one RTO
+      
+    if ((poll_status = poll(polldata, 1, 2 * RTO)) < 0) {
+      perror("Polling from client error");
+      exit(1);
+    }
+    else if (poll_status >= 1) {
+      // we got an event from the client
+      if (polldata[0].revents & POLLIN) {
+	// receive the packet
+	Packet* rp_packet = receivePacket(sockfd, addr_info, addr_len);
+	  
+	Packet r_packet = (*rp_packet);
+	
+	// checking to see if the received packet is expected
+	if (ack_num == r_packet.h_seq_num()) {
+	  updateAcknum(r_packet.packet_size());
+	}
+      }
+    }
+  }
+  
   // will receive a packet
   Packet* receivePacket (int sockfd, struct sockaddr * addr_info, size_t addr_len) {
 
@@ -89,14 +192,11 @@ public:
     // log the received packet
     logReceivedPacket(r_packet->h_seq_num());
 
-    if (!(r_packet->is_syn() /* || r_packet->is_fin() */))
-      updateAcknum(r_packet->packet_size());
-
     return r_packet;
   }
 
   // will send a packet
-  bool sendPacket (int sockfd, const struct sockaddr *addr_info, size_t addr_len, Packet *s_packet, bool isRetransmit) {
+  bool sendPacket (int sockfd, struct sockaddr *addr_info, size_t addr_len, Packet *s_packet, bool isRetransmit) {
     // cast to packet
     char* s_pstream = reinterpret_cast<char*> (s_packet);
 
@@ -117,7 +217,9 @@ public:
 	perror("Error writing to socket\n");
 	exit(-1);
       }
-
+      if (bytes_written == 0) {
+	printf("0 bytes written\n");
+      }
       // debugging thing
       if (bytes_written != send_bytes) {
 	fprintf(stderr, "THIS MESSAGE MEANS YOU NEED THE THING\n");
@@ -132,18 +234,20 @@ public:
     logSentPacket(s_packet->h_seq_num(), isRetransmit, s_packet->is_syn(), s_packet->is_fin());
 
     // Update seqnum
-    updateSeqnum(s_packet->packet_size());
-
+    if (!isRetransmit) {
+      updateSeqnum(s_packet->packet_size());
+    }
+    
     return true;
   }
   
-  bool sendFile (int sockfd, struct sockaddr *addr_info, size_t addr_len, char *filename) {
+  bool sendFile (int sockfd, struct sockaddr *addr_info, size_t addr_len) {
     // set this to initial values
     int filefd = -1;
     int bytes_read = -1;
-    Packet *r_packet = NULL;
+    Packet *rp_packet = NULL;
     cwnd_base = seq_num;
-
+ 
     // open the file that we need to read
     if ((filefd = open(filename, O_RDONLY)) < 0) {
       perror("Failed to open file");
@@ -165,25 +269,24 @@ public:
       
       // Read in the file into a buffer in increments of BUF_SIZE
       while (true) {
-       
 	// poll for ACKs from client
 	// polling for 10 ms and from 1 fd
 	if ((poll_status = poll(polldata, 1, 10)) < 0) {
 	  perror("Polling from client error");
 	  return false;
 	} else if (poll_status >= 1) {
-	  
 	  // we got an event from the client
 	  if (polldata[0].revents & POLLIN) {
 	    // receive the packet
-	    r_packet = receivePacket(sockfd, addr_info, addr_len);
-	    
+	    rp_packet = receivePacket(sockfd, addr_info, addr_len);
+	    Packet r_packet = (*rp_packet);
 	    // check to see if the ACK matches any outstanding packets
 	    std::list<packet_data>::const_iterator iter = p_list.begin();
 	    while (iter != p_list.end()){
 	      // checking the sequence numbers
-	      if (iter->packet->h_seq_num() == r_packet->h_ack_num() - iter->packet->packet_size()
-		  || iter->packet->h_seq_num() == (r_packet->h_ack_num() - iter->packet->packet_size()) + MAX_SEQNUM + 1) {
+	      if (iter->packet->h_seq_num() == r_packet.h_ack_num() - iter->packet->packet_size()
+		  || iter->packet->h_seq_num() == (r_packet.h_ack_num() - iter->packet->packet_size()) + MAX_SEQNUM + 1) {
+		updateAcknum(iter->packet->packet_size());
 		free(iter->packet);
 		iter = p_list.erase(iter);
 	      } else {
@@ -201,9 +304,11 @@ public:
 
 	  fsec sec_duration = current_time - iter->time_retrans;
 	  ms ms_duration = std::chrono::duration_cast<ms>(sec_duration);
-	  
-	  if (ms_duration.count() > timeout) {
-	    sendPacket(sockfd, (const struct sockaddr*)addr_info, addr_len, iter->packet, true);
+
+	  // printf("ms_duration: %lu\n", ms_duration.count());
+	  if (ms_duration.count() > (timeout)) {
+	    //printf("Timeout has occurred.\n");
+	    sendPacket(sockfd, addr_info, addr_len, iter->packet, true);
 	    packet_data data;
 	    data.packet = iter->packet;
 	    data.time_retrans = Time::now();
@@ -214,11 +319,13 @@ public:
 	    ++iter;
 	  }
 	}
-	
+
 	// send out new packets until fill up the cwnd
 	while (p_list.empty()
-	       || seq_num < (getCwndBase() + cwnd) % (MAX_SEQNUM + 1)
-	       || (((getCwndBase() + cwnd) != (getCwndBase() + cwnd) % (MAX_SEQNUM + 1)) && seq_num >= getCwndBase())) {       
+	       || seq_num < ((getCwndBase() + cwnd) % (MAX_SEQNUM + 1))
+	       || (((getCwndBase() + cwnd) != (getCwndBase() + cwnd) % (MAX_SEQNUM + 1)) &&
+		   seq_num >= getCwndBase())) {       
+
 	  // read next group of bytes from file
 	  memset(file_buf, 0, BUF_SIZE);
 	  bytes_read = read(filefd, file_buf, BUF_SIZE);
@@ -239,12 +346,11 @@ public:
 	  data.time_retrans = Time::now();
 
 	  // send the packet
-	  sendPacket(sockfd, (const struct sockaddr*)addr_info, addr_len, s_packet, false);
-
+	  sendPacket(sockfd, addr_info, addr_len, s_packet, false);
 	  // add to list of outstanding packets
 	  p_list.push_back(data);
 	}
-
+	
 	if (bytes_read == 0 && p_list.empty()) {
 	  break;
 	}
@@ -262,6 +368,7 @@ public:
     Packet* r_packet = NULL;
     
     int bytes_recv = 0;
+
     // Continue in the loop if there is more data to receive
     while ((bytes_recv = recvfrom (sockfd, (char*) r_pstream, PACKET_SIZE, MSG_WAITALL,
 				   addr_info, (unsigned int*)&addr_len)) != 0)
@@ -271,7 +378,7 @@ public:
 	  perror("Error with recvfrom");
 	  exit(-1);
 	}
-
+	//printf("This is the ACK\n");
 	// set the stream to a packet
 	r_packet = reinterpret_cast<Packet*>(r_pstream);
 
@@ -279,7 +386,10 @@ public:
 	logReceivedPacket(r_packet->h_seq_num());
 
 	// Check the FIN bit
-	if (r_packet->is_fin()) break;
+	if (r_packet->is_fin()) {
+	  updateAcknum(r_packet->packet_size());
+	  break;
+	}
 	
 	// Add the received packet into the linked list if it was not expected
 	if (r_packet->h_seq_num() != ack_num) {
@@ -325,23 +435,75 @@ public:
     seq_num = rand() % (MAX_SEQNUM + 1);
 
     // create dataless SYN packet
-    Packet s_packet(seq_num, 0, cwnd, true, false);
-    sendPacket(fd, addr_info, addr_len, &s_packet, false);
+    Packet *s_packet = new Packet(seq_num, 0, cwnd, true, false);
+
+    // Send the packet and wait for ACK
+  
+    // set up the polling
+      
+    struct pollfd polldata[1];
+
+    polldata[0].fd = fd;
+    polldata[0].events = POLLIN | POLLHUP | POLLERR;
+    polldata[0].revents = 0;
     
-    // Receive the SYNACK packet
-    Packet *r_packet = receivePacket(fd, addr_info, addr_len);
+    int poll_status = 0;
 
-    if (r_packet->is_syn()) {
-      ack_num = (r_packet->h_seq_num() + HEADER_SIZE) % (MAX_SEQNUM + 1);
-    } else {
-      perror("Received packet was not SYN");
-      return false;
+    bool recv_ack = false;
+    bool is_retransmit = false;
+    
+    // poll for ACKs from client
+    
+    while (true) {
+      // Send the initial packet
+      sendPacket(fd, addr_info, addr_len, s_packet, is_retransmit);
+
+      // Get time
+
+      // Wait for one RTO
+      
+      if ((poll_status = poll(polldata, 1, RTO)) < 0) {
+	perror("Polling from client error");
+	return false;
+      }
+      else if (poll_status >= 1) {
+	// we got an event from the client
+	if (polldata[0].revents & POLLIN) {
+	  // receive the packet
+	  Packet* rp_packet = receivePacket(fd, addr_info, addr_len);
+
+
+	  Packet r_packet = (*rp_packet);
+
+	  // checking to see if the received packet is the ACK
+	  if ((s_packet->h_seq_num() ==
+	       r_packet.h_ack_num() - s_packet->packet_size() ||
+	       s_packet->h_seq_num() ==
+	       (r_packet.h_ack_num() - s_packet->packet_size()) + MAX_SEQNUM + 1)) {
+
+	    updateAcknum(r_packet.packet_size());
+	    recv_ack = true;
+	    free(s_packet);
+	  }
+	  if (r_packet.is_syn()) {
+	    recv_ack = true;
+	    ack_num = (r_packet.h_seq_num() + r_packet.packet_size()) % (MAX_SEQNUM + 1);
+	  }
+	}
+      }
+      
+      // If the ack was received, stop polling
+      if (recv_ack) {
+	break;
+      }
+      else {
+	is_retransmit = true;
+      }
     }
-
+      
     // Send the initial file request
-    Packet req_packet(seq_num, ack_num, cwnd, filename, strlen(filename), false, false);
-    sendPacket(fd, addr_info, addr_len, &req_packet, false);
-
+    Packet *req_packet = new Packet(seq_num, ack_num, cwnd, filename, strlen(filename), false, false);
+    sendPacket(fd, addr_info, addr_len, req_packet, false);
     return true;
   }
   
@@ -351,28 +513,89 @@ public:
       return false;
     }
 
-    Packet *r_packet = receivePacket(sockfd, addr_info, addr_len);
+    Packet *rp_packet = receivePacket(sockfd, addr_info, addr_len);
+    Packet r_packet = (*rp_packet);
     
-    if (r_packet->is_syn()) {
-      srand (time(NULL) + 1);
-      seq_num = rand() % (MAX_SEQNUM + 1);
-      ack_num = (r_packet->h_seq_num() + 16) % (MAX_SEQNUM + 1);
-    } else {
+    srand (time(NULL) + 1);
+    seq_num = rand() % (MAX_SEQNUM + 1);
+    ack_num = ((r_packet.h_seq_num() + HEADER_SIZE) % (MAX_SEQNUM + 1));
+    
+    if (!(r_packet.is_syn())) {
       perror("Received packet was not SYN");
       return false;
     }
+    
     return true;
   }
 
-  bool accept(int sockfd, const struct sockaddr *addr_info, size_t addr_len) {
+  bool accept(int sockfd, struct sockaddr *addr_info, size_t addr_len) {
     if (seq_num == -1 && ack_num == -1) {
       fprintf(stderr, "Failed to accept, has not received connection request from client\n");
       return false;
     }
+    // create dataless SYNACK packet
+    Packet *s_packet = new Packet(seq_num, ack_num, cwnd, true, false);
+
+    // Send the SYNACK, wait for initial file request
     
-    // create dataless SYN packet
-    Packet s_packet(seq_num, ack_num, cwnd, true, false);
-    sendPacket(sockfd, addr_info, addr_len, &s_packet, false);
+    // set up the polling
+      
+    struct pollfd polldata[1];
+
+    polldata[0].fd = sockfd;
+    polldata[0].events = POLLIN | POLLHUP | POLLERR;
+    polldata[0].revents = 0;
+    
+    int poll_status = 0;
+
+    bool recv_ack = false;
+    bool is_retransmit = false;
+    
+    // poll for ACKs from client
+    
+    while (true) {
+      // Send the initial packet
+      sendPacket(sockfd, addr_info, addr_len, s_packet, is_retransmit);
+
+      // Wait for one RTO
+      
+      if ((poll_status = poll(polldata, 1, RTO)) < 0) {
+	perror("Polling from client error");
+	return false;
+      }
+      else if (poll_status >= 1) {
+	// we got an event from the client
+	if (polldata[0].revents & POLLIN) {
+	  // receive the packet
+	  Packet* rp_packet = receivePacket(sockfd, addr_info, addr_len);
+
+
+	  Packet r_packet = (*rp_packet);
+
+	  // checking to see if the received packet is the ACK
+	  if ((s_packet->h_seq_num() ==
+	       r_packet.h_ack_num() - s_packet->packet_size() ||
+	       s_packet->h_seq_num() ==
+	       (r_packet.h_ack_num() - s_packet->packet_size()) + MAX_SEQNUM + 1)) {
+	    //printf("prev ack_num: %d\n", ack_num);
+	    //ack_num = (r_packet.h_seq_num() + r_packet.packet_size()) % (MAX_SEQNUM + 1);
+	    updateAcknum(r_packet.packet_size());
+	    //printf("updated ack_num: %d\n", ack_num);
+	    recv_ack = true;
+	    filename = r_packet.p_data();
+	    free(s_packet);
+	  }
+	}
+      }
+      
+      // If the ack was received, stop polling
+      if (recv_ack) {
+	break;
+      }
+      else {
+	is_retransmit = true;
+      }
+    }
     
     return true;
   }
@@ -413,19 +636,21 @@ private:
   int seq_num;
   int ack_num;
   // curent congestion window size
-  uint32_t cwnd;
-  uint32_t cwnd_base;
+  int cwnd;
+  int cwnd_base;
   // current timeout; always 500ms
   int timeout;
   // the last unACKed packet seq_num
   bool con_idle;
   // just to tell if we are server or not
   bool is_server;
-
+  // requested filename
+  char* filename;
+  
   // stores unACKed packets in case we need to retransmit
   std::list<packet_data> p_list;
 
-  uint32_t getCwndBase() {
+  int getCwndBase() {
     p_list.sort(compTime);
     return p_list.front().packet->h_seq_num();
   }
