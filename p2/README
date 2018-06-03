@@ -8,3 +8,24 @@ Test retransmissions
 Add FIN ACKing of last packet (Cade and Amit said they got marked off for this)
 Implement timeouts of SYN/FIN procedure
 Extra credit
+
+Testing retransmissions:
+
+Adding fixed delay to all packets:
+tc qdisc add dev <network info> root netem delay <time>
+- use ifconfig to find what to put in <network info>
+  - eg. eth0
+- <time> is the amount of delay that will be added
+  - eg. 100ms
+
+Adding distributed delay to all packets:
+tc qdisc change dev <network info> root netem delay <time1> <time2> distribution normal
+- do the same as above for network info
+- <time1> should be greater than <time2>
+  - eg. 100ms and 20ms
+
+Packet Loss
+tc qdisc change dev <network info> root netem loss <percent>
+- do the same as above for network info
+- <percent> is the percentage of packets that will be lost
+  - eg. 50%
