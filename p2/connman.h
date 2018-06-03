@@ -1,9 +1,4 @@
-// connection manager stuff
-// TODO:
-//       Test retransmissions
-//       Add FIN ACKing of last packet
-//       Implement timeouts of SYN/FIN procedure
-//       Fix wraparound issue
+// the reliable data transfer functions for both the client and server of our CS 118 P2
 
 #include <cstdlib>
 #include <stdio.h>
