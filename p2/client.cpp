@@ -1,3 +1,5 @@
+// the client portion of our CS 118 P2
+
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
