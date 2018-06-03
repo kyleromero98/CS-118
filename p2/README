@@ -5,8 +5,7 @@ This submission contains the source code, README, and Makefile for our Project 2
 
 TODO:
 Test retransmissions
-Add FIN ACKing of last packet (Cade and Amit said they got marked off for this)
-Implement timeouts of SYN/FIN procedure
+Check with Cade and Amit about ACKing last FIN packet
 Extra credit
 
 Testing retransmissions:
