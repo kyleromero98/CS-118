@@ -1,17 +1,6 @@
 //packet stuff
 #include "constants.h"
 
-class Offsets {
- public:
-  int seq_num = 0;
-  int ack_num = sizeof(int);
-  int cwnd = ack_num + sizeof(int);
-  int syn_bit = cwnd + sizeof(short);
-  int fin_bit = syn_bit + sizeof(bool);
-  int data_size = fin_bit + sizeof(bool);
-  int data = data_size + sizeof(int);
-} Offsets;
-
 struct Header {
   int seq_num;
   int ack_num;
@@ -42,20 +31,16 @@ public:
     header.fin_bit = isFin;
     memset(data, 0, BUF_SIZE);
     if (data_size > BUF_SIZE) {
-      fprintf(stderr, "Could not create packet\n");
+      fprintf(stderr, "Could not create packet, data size exceeded BUF_SIZE\n");
       exit(-1);
-    }
-    else {
+    } else {
       header.data_size = data_size;
     }
     if (in_data != NULL) {
-      if (strlen(in_data) > BUF_SIZE) {
-	fprintf(stderr, "Could not create packet\n");
-	exit(-1);
-      }
-      else {
-	memcpy(data, in_data, data_size);
-      }
+      memcpy(data, in_data, data_size);
+    } else {
+      fprintf(stderr, "no data was sent\n");
+      exit(1);
     }
   }
   bool valid_seq() const {
@@ -94,6 +79,7 @@ public:
   }
   
   void dump() const {
+    printf("THIS IS A PACKET DUMP\n");
     printf("seq_num: %d, ack_num: %d, pkt_size: %d\n", header.seq_num, header.ack_num, packet_size());
     printf("data_len: %d, data: \n", header.data_size);
     printf("%s\n", data);
