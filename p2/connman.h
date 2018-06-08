@@ -456,7 +456,7 @@ public:
     }
     
     // opens the file for writing to 'received.data'
-    int fd = open(filename, O_CREAT | O_WRONLY, 0666);
+    int fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0666);
 
     char r_pstream[PACKET_SIZE];
     memset(r_pstream, 0, PACKET_SIZE);
