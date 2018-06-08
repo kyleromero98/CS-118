@@ -137,7 +137,7 @@ public:
 	  Packet r_packet = (*rp_packet);
 
 	  // checking to see if the received packet is the FINACK
-	  if (r_packet.is_fin()) {
+	  if (ack_num == r_packet.h_seq_num()) {
 	    recv_ack = true;
 	    free(f_packet);
 	  }
@@ -159,8 +159,7 @@ public:
     // Create FIN packet to send
     Packet *f_packet = new Packet(seq_num, ack_num, cwnd, false, true);
 
-    // set up the polling
-      
+    // set up the polling      
     struct pollfd polldata[1];
 
     polldata[0].fd = sockfd;
@@ -173,18 +172,15 @@ public:
     bool is_retransmit = false;
     
     // poll for ACKs from client
-    
-    while (true) {
+    while (!recv_ack) {
       // Send the initial packet
       sendPacket(sockfd, addr_info, addr_len, f_packet, is_retransmit);
 
       // Wait for one RTO
-      
       if ((poll_status = poll(polldata, 1, RTO)) < 0) {
 	perror("Polling from client error");
 	exit(1);
-      }
-      else if (poll_status >= 1) {
+      } else if (poll_status >= 1) {
 	// we got an event from the client
 	if (polldata[0].revents & POLLIN) {
 	  // receive the packet
@@ -200,7 +196,7 @@ public:
 	       (r_packet.h_ack_num() - f_packet->packet_size()) + MAX_SEQNUM + 1)))*/ {
 	    updateAcknum(r_packet.packet_size());
 
-	    Packet *fa_packet = new Packet(seq_num, ack_num, cwnd, false, true);
+	    Packet *fa_packet = new Packet(seq_num, ack_num, cwnd, false, false);
 	    sendPacket(sockfd, addr_info, addr_len, fa_packet, false);
 
 	    recv_ack = true;
@@ -208,14 +204,7 @@ public:
 	  }
 	}
       }
-      
-      // If the ack was received, stop polling
-      if (recv_ack) {
-	break;
-      }
-      else {
-	is_retransmit = true;
-      }
+      is_retransmit = true;
     }
   }
 
@@ -239,8 +228,7 @@ public:
     if ((poll_status = poll(polldata, 1, 2 * RTO)) < 0) {
       perror("Polling from client error");
       exit(1);
-    }
-    else if (poll_status >= 1) {
+    } else if (poll_status >= 1) {
       // we got an event from the client
       if (polldata[0].revents & POLLIN) {
 	// receive the packet
@@ -788,6 +776,10 @@ public:
     }
     std::stringstream ss;
     ss << "Sending packet " << seq_num;
+
+    if (is_server) {
+      ss << " " << cwnd;
+    }
 
     // checking for special packets
     if (isRetransmit) {
