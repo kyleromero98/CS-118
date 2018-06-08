@@ -3,9 +3,21 @@ Kyle Romero, 204747283
 
 This submission contains the source code, README, and Makefile for our Project 2 for CS 118.
 
+Description of How We Divided the Work Load
+Kyle - Initial 3-way ACK procedure
+     - Initial congestion window code
+     - Initial timeout/retransmission procedure
+     - Report
+     - Testing/debugging
+     - Some of extra credit
+
+Jair - Initial boilerplate code, packet.h and basic transmission
+     - Finishing 3-way ACK procedure
+     - FIN Procedure
+     - Report
+     - Testing/debugging
+
 TODO:
-Test retransmissions
-Check with Cade and Amit about ACKing last FIN packet
 Extra credit
 
 Testing retransmissions:
