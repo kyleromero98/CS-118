@@ -2,7 +2,7 @@
 #include "constants.h"
 
 class Offsets {
-public:
+ public:
   int seq_num = 0;
   int ack_num = sizeof(int);
   int cwnd = ack_num + sizeof(int);
@@ -86,21 +86,19 @@ public:
   short h_cwnd() const {
     return header.cwnd;
   }
-  bool h_syn() const {
-    return header.syn_bit;
-  }
-  bool h_fin() const {
-    return header.fin_bit;
-  }
-  int h_data_size() const {
-    return header.data_size;
-  }
   char* p_data() {
     return data;
   }
   Header h_header() const {
     return header;
   }
+  
+  void dump() const {
+    printf("seq_num: %d, ack_num: %d, pkt_size: %d\n", header.seq_num, header.ack_num, packet_size());
+    printf("data_len: %d, data: \n", header.data_size);
+    printf("%s\n", data);
+  }
+  
 private:
   Header header;
   char data[BUF_SIZE];

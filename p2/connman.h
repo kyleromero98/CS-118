@@ -43,6 +43,27 @@ public:
     return (second.time_sent > first.time_sent);
   }
 
+  // compares the sequence numbers of two packets
+  // returns true if the second seq number is greater than the first
+  static bool compSeqs (packet_data first, packet_data second) {
+    int diff = (second.packet->h_seq_num()) - (first.packet->h_seq_num());
+    // if difference too great, account for overflow by reversing return value
+    if (std::abs(diff) > (MAX_SEQNUM / 2)) {
+      if (diff > 0) {
+	return false;
+      } else {
+	return true;
+      }
+    } else {
+      if (diff > 0) {
+	return true;
+      } else {
+	return false;
+      }
+    }
+    return true;
+  }
+
   // updates the sequence number by bytes, wraps around
   void updateSeqnum (int bytes) {
     seq_num = (seq_num + bytes) % (MAX_SEQNUM + 1);
@@ -54,9 +75,14 @@ public:
   }
 
   // sends an ACK packet
-  void sendAck (int sockfd, struct sockaddr *addr_info, size_t addr_len) {
-    Packet *s_packet = new Packet(seq_num, ack_num, cwnd, false, false);
-    sendPacket (sockfd, addr_info, addr_len, s_packet, false);
+  void sendAck (int sockfd, struct sockaddr *addr_info, size_t addr_len, int p_ack_num) {
+    if (p_ack_num == -1) {
+      Packet *s_packet = new Packet(seq_num, ack_num, cwnd, false, false);
+      sendPacket (sockfd, addr_info, addr_len, s_packet, false);
+    } else {
+      Packet *s_packet = new Packet(seq_num, p_ack_num, cwnd, false, false);
+      sendPacket (sockfd, addr_info, addr_len, s_packet, false);
+    }
   }
 
   // client FIN procedure
@@ -110,7 +136,7 @@ public:
 	       f_packet->h_seq_num() ==
 		(r_packet.h_ack_num() - f_packet->packet_size()) + MAX_SEQNUM + 1))) {
 	    updateAcknum(r_packet.packet_size());
-	    sendAck(sockfd, addr_info, addr_len);
+	    sendAck(sockfd, addr_info, addr_len, -1);
 	    recv_ack = true;
 	    free(f_packet);
 	  }
@@ -285,6 +311,8 @@ public:
 		free(iter->packet);
 		iter = p_list.erase(iter);
 	      } else {
+		//fprintf(stderr, "received packet: %d\n", r_packet.h_ack_num() - iter->packet->packet_size());
+		//fprintf(stderr, "packet in p_list: %d\n", iter->packet->h_seq_num());
 		++iter;
 	      }
 	    }
@@ -303,13 +331,15 @@ public:
 	  // printf("ms_duration: %lu\n", ms_duration.count());
 	  if (ms_duration.count() > (timeout)) {
 	    //printf("Timeout has occurred.\n");
-	    sendPacket(sockfd, addr_info, addr_len, iter->packet, true);
+	    sendPacket(sockfd, addr_info, addr_len, iter->packet, true);	    
 	    packet_data data;
 	    data.packet = iter->packet;
 	    data.time_retrans = Time::now();
 	    data.time_sent = iter->time_sent;
 	    iter = p_list.erase(iter);
 	    p_list.push_back(data);
+
+	    fprintf(stderr, "p_list size: %lu\n", p_list.size());
 	  } else {
 	    ++iter;
 	  }
@@ -344,6 +374,7 @@ public:
 	  sendPacket(sockfd, addr_info, addr_len, s_packet, false);
 	  // add to list of outstanding packets
 	  p_list.push_back(data);
+	  fprintf(stderr, "p_list size: %lu\n", p_list.size());
 	}
 	
 	if (bytes_read == 0 && p_list.empty()) {
@@ -356,12 +387,17 @@ public:
 
   bool receiveFile (int sockfd, struct sockaddr *addr_info, size_t addr_len, const char *filename) {
 
+    if (p_list.size() != 0) {
+      fprintf(stderr, "Error: p_list was not empty when we started receiving file\n");
+      return false;
+    }
+    
     // opens the file for writing to 'received.data'
     int fd = open(filename, O_CREAT | O_WRONLY, 0666);
 
     char r_pstream[PACKET_SIZE];
     Packet* r_packet = NULL;
-    
+       
     int bytes_recv = 0;
 
     // Continue in the loop if there is more data to receive
@@ -376,7 +412,10 @@ public:
 	//printf("This is the ACK\n");
 	// set the stream to a packet
 	r_packet = reinterpret_cast<Packet*>(r_pstream);
-
+	Packet* tmp_packet = new Packet(r_packet->h_seq_num(), r_packet->h_ack_num(), r_packet->h_cwnd(),
+					r_packet->p_data(), r_packet->data_size(), r_packet->is_syn(),
+					r_packet->is_fin());
+	
 	// Log received packet
 	logReceivedPacket(r_packet->h_seq_num());
 
@@ -385,37 +424,65 @@ public:
 	  updateAcknum(r_packet->packet_size());
 	  break;
 	}
-	
-	// Add the received packet into the linked list if it was not expected
-	if (r_packet->h_seq_num() != ack_num) {
-	  packet_data data;
-	  data.packet = r_packet;
-	  data.time_sent = Time::now();
 
+	sendAck(sockfd, addr_info, addr_len, ((r_packet->h_seq_num()) + (r_packet->packet_size())) % (MAX_SEQNUM + 1));
+
+	// the packet was the one we expected
+	if (r_packet->h_seq_num() == ack_num) {
+	  //update the ack num
+	  updateAcknum(r_packet->packet_size());
+	  fprintf(stderr, "updating ack_num by: %d\n", r_packet->packet_size());
+	  
+	  // append the data to the file
+	  if (!appendToFile(fd, r_packet->p_data(), r_packet->data_size())) {
+	    return false;
+	  }
+
+	  // sort the list according to the length of it
+	  p_list.sort(compSeqs);
+	  
+	  // append other data to file that might be there
+	  std::list<packet_data>::iterator it = p_list.begin();
+	  while (!p_list.empty() && it->packet->h_seq_num() == ack_num) {
+	    // matched front of list so update ACK
+	    // append to file
+	    if (!appendToFile(fd, it->packet->p_data(), it->packet->data_size())) {
+	      return false;
+	    }
+
+	    updateAcknum(it->packet->packet_size());
+	    free(it->packet);
+	    it = p_list.erase(it);
+	  }
+	} else {
+	  // add out of order packet to list
+	  packet_data data;
+	  data.packet = tmp_packet;
+	  data.time_sent = Time::now();
+	  
 	  p_list.push_back(data);
 	}
-	// Otherwise write the data to the file
-	else {
-	  // Update ACK and write the data to a file
-	  if (write(fd, r_packet->p_data(), r_packet->h_data_size()) < 0) {
-	    perror("Error writing to file");
-	  }
-	  updateAcknum(r_packet->packet_size());
-	}
-	// Send ACK
-	sendAck(sockfd, addr_info, addr_len);
       }
 
     // If the list is not empty, add the out of order packets to the file
     if (!p_list.empty()) {
-      p_list.sort(compTime);
+      p_list.sort(compSeqs);
       std::list<packet_data>::iterator it;
       for (it = p_list.begin(); it != p_list.end(); it++) {
-	write(fd, it->packet->p_data(), it->packet->h_data_size());
-	updateAcknum(it->packet->h_data_size());
+	if (!appendToFile(fd, it->packet->p_data(), it->packet->data_size())) {
+	  return false;
+	}
+	updateAcknum(it->packet->data_size());
       }
     }
+    return true;
+  }
 
+  bool appendToFile(int fd, char* data, int bytes) {
+    if (write(fd, data, bytes) < 0) {
+      perror("Error writing to received.data");
+      return false;
+    }
     return true;
   }
 
@@ -426,8 +493,7 @@ public:
     }
     
     // establish initial seq_num
-    srand (time(NULL));
-    seq_num = rand() % (MAX_SEQNUM + 1);
+    seq_num = 0;
 
     // create dataless SYN packet
     Packet *s_packet = new Packet(seq_num, 0, cwnd, true, false);
@@ -511,8 +577,7 @@ public:
     Packet *rp_packet = receivePacket(sockfd, addr_info, addr_len);
     Packet r_packet = (*rp_packet);
     
-    srand (time(NULL) + 1);
-    seq_num = rand() % (MAX_SEQNUM + 1);
+    seq_num = 0;
     ack_num = ((r_packet.h_seq_num() + HEADER_SIZE) % (MAX_SEQNUM + 1));
     
     if (!(r_packet.is_syn())) {
