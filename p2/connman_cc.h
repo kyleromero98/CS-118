@@ -31,10 +31,16 @@ public:
   ConnectionManager(bool isServer) {
     seq_num = -1;
     ack_num = -1;
-    cwnd = WINDOW_SIZE;
+    cwnd = 1024;
+    ssthresh = 15360;
     timeout = RTO; // in ms
     is_server = isServer;
     hasReceivedFileAck = false;
+    // 0 is SS
+    // 1 is CA
+    // 2 is FR
+    cc_state = 0;
+    outOfOrderPackets = 0;
   }
 
   // compares the the timing of two packets
@@ -345,6 +351,7 @@ public:
       while (true) {
 	// poll for ACKs from client
 	// polling for 10 ms and from 1 fd
+	
 	if ((poll_status = poll(polldata, 1, 10)) < 0) {
 	  perror("Polling from client error");
 	  return false;
@@ -357,16 +364,29 @@ public:
 	      continue;
 	    Packet r_packet = (*rp_packet);
 	    // check to see if the ACK matches any outstanding packets
+	    p_list.sort(compSeqs);
+
+	    // check to see if the ACK matches the oldest outstanding packet
 	    std::list<packet_data>::const_iterator iter = p_list.begin();
+	    if (iter->packet->h_seq_num() == r_packet.h_ack_num() - iter->packet->packet_size()
+		|| (iter->packet->h_seq_num() == (r_packet.h_ack_num() - iter->packet->packet_size()) + MAX_SEQNUM + 1)) {
+	      cwnd += PACKET_SIZE;
+	      free(iter->packet);
+	      iter = p_list.erase(iter);
+	      outOfOrderPackets = 0;
+	    }
+	      
+	    // check to see if the ACK matches any outstanding packet but is out of order
+	    iter = p_list.begin();
 	    while (iter != p_list.end()){
 	      // checking the sequence numbers
 	      //fprintf(stderr, "received packet: %d\n", r_packet.h_ack_num() - iter->packet->packet_size());
 	      //fprintf(stderr, "packet in p_list: %d\n", iter->packet->h_seq_num());
 	      if (iter->packet->h_seq_num() == r_packet.h_ack_num() - iter->packet->packet_size()
 		  || (iter->packet->h_seq_num() == (r_packet.h_ack_num() - iter->packet->packet_size()) + MAX_SEQNUM + 1)) {
-		//end of suspect code
 		free(iter->packet);
 		iter = p_list.erase(iter);
+		outOfOrderPackets++;
 	      } else {
 		++iter;
 	      }
@@ -378,6 +398,10 @@ public:
 	    p_list.sort(compSeqs);
 	    ack_num = (p_list.front().packet)->h_seq_num();
 	  }
+	}
+
+	if (outOfOrderPackets >= 3) {
+	  
 	}
 	
 	//now we check the timeouts by iterating through outstanding packets
@@ -392,6 +416,15 @@ public:
 	  // printf("ms_duration: %lu\n", ms_duration.count());
 	  if (ms_duration.count() > (timeout)) {
 	    //printf("Timeout has occurred.\n");
+
+	    ssthresh = cwnd / 2;
+	    if (ssthresh < PACKET_SIZE) {
+	      ssthresh = PACKET_SIZE;
+	    }
+	    cwnd = PACKET_SIZE;
+	    fprintf(stderr, "TIMEOUT EVENT going to SLOW START: Reseting cwnd and adjusting ssthresh\n");
+	    cc_state = 0;
+	    
 	    sendPacket(sockfd, addr_info, addr_len, iter->packet, true);
 	    packet_data data;
 	    data.packet = iter->packet;
@@ -493,7 +526,7 @@ public:
 	  updateAcknum(tmp_packet->packet_size());
 	  break;
 	}
-
+	
 	if (!hasReceivedFileAck) {
 	  //check if received segment was ACK of filename
 	  if (tmp_packet->h_seq_num() == ack_num) {
@@ -512,7 +545,6 @@ public:
 	      file_ack.time_retrans = Time::now();
 	    }
 	  }
-	  continue;
 	}
 
 	sendAck(sockfd, addr_info, addr_len, (tmp_packet->h_seq_num() + tmp_packet->packet_size()) % (MAX_SEQNUM + 1));
@@ -778,7 +810,7 @@ public:
     ss << "Sending packet " << seq_num;
 
     if (is_server) {
-      ss << " " << cwnd;
+      ss << " " << cwnd << " " << ssthresh;
     }
 
     // checking for special packets
@@ -811,6 +843,9 @@ private:
   // curent congestion window size
   int cwnd;
   int cwnd_base;
+  int ssthresh;
+  int cc_state;
+  int outOfOrderPackets;
   // current timeout; always 500ms
   int timeout;
   // the last unACKed packet seq_num
