@@ -8,6 +8,7 @@ Instructions
 2) Our client works with both types of servers
 3) Run the regular server with command of form ./server [required args]
 4) Run the congestion control server with command of form ./cc_server [required args]
+5) Run the client with command of the form ./client [required args]
 
 Description of How We Divided the Work Load
 Kyle - Initial 3-way ACK procedure
