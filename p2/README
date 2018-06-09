@@ -3,6 +3,12 @@ Kyle Romero, 204747283
 
 This submission contains the source code, README, and Makefile for our Project 2 for CS 118.
 
+Instructions
+1) Make will build both regular and congestion control server
+2) Our client works with both types of servers
+3) Run the regular server with command of form ./server [required args]
+4) Run the congestion control server with command of form ./cc_server [required args]
+
 Description of How We Divided the Work Load
 Kyle - Initial 3-way ACK procedure
      - Initial congestion window code
