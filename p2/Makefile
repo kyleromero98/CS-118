@@ -15,7 +15,7 @@ client:
 	$(CC) $(CFLAGS) client.cpp -o $@
 
 dist:
-	tar -z -cf 204747283.904771873.tar.gz server.cpp client.cpp constants.h Makefile packet.h connman.h README report.pdf cc_server.cpp connman_cc.h
+	tar -z -cf project2.204747283.904771873.tar.gz server.cpp client.cpp constants.h Makefile packet.h connman.h README report.pdf cc_server.cpp connman_cc.h
 
 clean:
 	rm -f *.o *.so *.tar.gz server client cc_server received.data
