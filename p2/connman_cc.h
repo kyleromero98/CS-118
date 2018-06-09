@@ -370,10 +370,21 @@ public:
 	    std::list<packet_data>::const_iterator iter = p_list.begin();
 	    if (iter->packet->h_seq_num() == r_packet.h_ack_num() - iter->packet->packet_size()
 		|| (iter->packet->h_seq_num() == (r_packet.h_ack_num() - iter->packet->packet_size()) + MAX_SEQNUM + 1)) {
-	      cwnd += PACKET_SIZE;
+	      if (cc_state == 0) {
+		cwnd += PACKET_SIZE;
+		outOfOrderPackets = 0;
+	      } else if (cc_state == 1) {
+		// this line is suspect
+		cwnd = roundUp ((int)(cwnd + (PACKET_SIZE * ((float)PACKET_SIZE / (float)cwnd))), PACKET_SIZE);
+		outOfOrderPackets = 0;
+	      } else if (cc_state == 2) {
+		cc_state = 1;
+		cwnd = ssthresh;
+		outOfOrderPackets = 0;
+		fprintf(stderr, "FAST RETRANSMIT success, transitioning to CONGESTION AVOIDANCE\n");
+	      }
 	      free(iter->packet);
 	      iter = p_list.erase(iter);
-	      outOfOrderPackets = 0;
 	    }
 	      
 	    // check to see if the ACK matches any outstanding packet but is out of order
@@ -386,7 +397,11 @@ public:
 		  || (iter->packet->h_seq_num() == (r_packet.h_ack_num() - iter->packet->packet_size()) + MAX_SEQNUM + 1)) {
 		free(iter->packet);
 		iter = p_list.erase(iter);
-		outOfOrderPackets++;
+		if (cc_state == 0 || cc_state == 1) {
+		  outOfOrderPackets++;
+		} else if (cc_state == 2) {
+		  cwnd += PACKET_SIZE;
+		}
 	      } else {
 		++iter;
 	      }
@@ -400,8 +415,30 @@ public:
 	  }
 	}
 
-	if (outOfOrderPackets >= 3) {
-	  
+	if (cc_state == 0 && cwnd >= ssthresh) {
+	  cc_state = 1;
+	  fprintf(stderr, "CWND reached, transitioning to CONGESTION AVOIDANCE\n");
+	}
+	
+	//fprintf (stderr, "OUT OF ORDER PACKETS: %d\n", outOfOrderPackets);
+	if (outOfOrderPackets == 3) {
+	  fprintf(stderr, "3 OUT OF ORDER PACKETS: Transitioning to FAST RECOVERY\n");
+	  cc_state = 2;
+	  ssthresh = roundUp(cwnd / 2, PACKET_SIZE);
+	  cwnd = roundUp (ssthresh + (3 * PACKET_SIZE), PACKET_SIZE);
+
+	  // retransmit the packet
+	  p_list.sort(compSeqs);
+	  std::list<packet_data>::const_iterator iter = p_list.begin();
+
+	  sendPacket(sockfd, addr_info, addr_len, iter->packet, true);
+	  packet_data data;
+	  data.packet = iter->packet;
+	  data.time_retrans = Time::now();
+	  data.time_sent = iter->time_sent;
+	  iter = p_list.erase(iter);
+	  p_list.push_back(data);
+	  outOfOrderPackets++;
 	}
 	
 	//now we check the timeouts by iterating through outstanding packets
@@ -417,10 +454,7 @@ public:
 	  if (ms_duration.count() > (timeout)) {
 	    //printf("Timeout has occurred.\n");
 
-	    ssthresh = cwnd / 2;
-	    if (ssthresh < PACKET_SIZE) {
-	      ssthresh = PACKET_SIZE;
-	    }
+	    ssthresh = roundUp(cwnd / 2, PACKET_SIZE);
 	    cwnd = PACKET_SIZE;
 	    fprintf(stderr, "TIMEOUT EVENT going to SLOW START: Reseting cwnd and adjusting ssthresh\n");
 	    cc_state = 0;
@@ -867,4 +901,16 @@ private:
     p_list.sort(compTime);
     return p_list.front().packet->h_seq_num();
   }
+
+  int roundUp(int numToRound, int multiple) {
+    if(multiple == 0) {
+	return numToRound;
+    }
+
+    int remainder = numToRound % multiple;
+    if (remainder == 0) {
+	return numToRound;
+    }
+    return numToRound + multiple - remainder;
+  }  
 };
