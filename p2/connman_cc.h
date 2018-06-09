@@ -52,8 +52,7 @@ public:
   // compares the sequence numbers of two packets
   // returns true if the second seq number is greater than the first
   static bool compSeqs (packet_data first, packet_data second) {
-    int diff = (second.packet->h_seq_num()) - (first.packet->h_seq_num());
-    // if difference too great, account for overflow by reversing return value
+    int diff = (second.packet->h_seq_num()) - (first.packet->h_seq_num());    // if difference too great, account for overflow by reversing return value
     if (std::abs(diff) > (MAX_SEQNUM / 2)) {
       if (diff > 0) {
 	return false;
@@ -372,17 +371,16 @@ public:
 		|| (iter->packet->h_seq_num() == (r_packet.h_ack_num() - iter->packet->packet_size()) + MAX_SEQNUM + 1)) {
 	      if (cc_state == 0) {
 		cwnd += PACKET_SIZE;
-		outOfOrderPackets = 0;
 	      } else if (cc_state == 1) {
 		// this line is suspect
-		cwnd = roundUp ((int)(cwnd + (PACKET_SIZE * ((float)PACKET_SIZE / (float)cwnd))), PACKET_SIZE);
-		outOfOrderPackets = 0;
+		//fprintf(stderr, "out of order ACK received, updating cwnd\n");
+		cwnd += (int)(((float)PACKET_SIZE / (float)cwnd) * (float)PACKET_SIZE);
 	      } else if (cc_state == 2) {
 		cc_state = 1;
 		cwnd = ssthresh;
-		outOfOrderPackets = 0;
 		fprintf(stderr, "FAST RETRANSMIT success, transitioning to CONGESTION AVOIDANCE\n");
 	      }
+	      outOfOrderPackets = 0;
 	      free(iter->packet);
 	      iter = p_list.erase(iter);
 	    }
@@ -408,7 +406,8 @@ public:
 	    }
 	  }
 	  if (p_list.empty()) {
-	    ack_num += cwnd;
+	    //fprintf (stderr, "THIS LINE IS CAUSING ISSUES\n");
+	    ack_num += (cwnd / PACKET_SIZE) * PACKET_SIZE;
 	  } else {
 	    p_list.sort(compSeqs);
 	    ack_num = (p_list.front().packet)->h_seq_num();
@@ -417,15 +416,18 @@ public:
 
 	if (cc_state == 0 && cwnd >= ssthresh) {
 	  cc_state = 1;
-	  fprintf(stderr, "CWND reached, transitioning to CONGESTION AVOIDANCE\n");
+	  fprintf(stderr, "SSTHRESH reached, transitioning to CONGESTION AVOIDANCE\n");
 	}
 	
 	//fprintf (stderr, "OUT OF ORDER PACKETS: %d\n", outOfOrderPackets);
 	if (outOfOrderPackets == 3) {
 	  fprintf(stderr, "3 OUT OF ORDER PACKETS: Transitioning to FAST RECOVERY\n");
 	  cc_state = 2;
-	  ssthresh = roundUp(cwnd / 2, PACKET_SIZE);
-	  cwnd = roundUp (ssthresh + (3 * PACKET_SIZE), PACKET_SIZE);
+	  ssthresh = cwnd / 2;
+	  if (ssthresh < PACKET_SIZE) {
+	    ssthresh = PACKET_SIZE;
+	  }
+	  cwnd = ssthresh + (3 * PACKET_SIZE);
 
 	  // retransmit the packet
 	  p_list.sort(compSeqs);
@@ -454,7 +456,10 @@ public:
 	  if (ms_duration.count() > (timeout)) {
 	    //printf("Timeout has occurred.\n");
 
-	    ssthresh = roundUp(cwnd / 2, PACKET_SIZE);
+	    ssthresh = cwnd / 2;
+	    if (ssthresh < PACKET_SIZE) {
+	      ssthresh = PACKET_SIZE;
+	    }
 	    cwnd = PACKET_SIZE;
 	    fprintf(stderr, "TIMEOUT EVENT going to SLOW START: Reseting cwnd and adjusting ssthresh\n");
 	    cc_state = 0;
@@ -473,11 +478,13 @@ public:
 	  }
 	}
 
+	int cwnd_round = (cwnd / PACKET_SIZE) * PACKET_SIZE;
+	cwnd_base = ack_num; 
 	// send out new packets until fill up the cwnd
 	while (p_list.empty()
-	       || seq_num < ((getCwndBase() + cwnd) % (MAX_SEQNUM + 1))
-	       || (((getCwndBase() + cwnd) != (getCwndBase() + cwnd) % (MAX_SEQNUM + 1)) &&
-		   seq_num >= getCwndBase())) {       
+	       || seq_num < ((cwnd_base + cwnd_round) % (MAX_SEQNUM + 1))
+	       || (((cwnd_base + cwnd_round) != (cwnd_base + cwnd_round) % (MAX_SEQNUM + 1)) &&
+		   seq_num >= cwnd_base)) {       
 
 	  // read next group of bytes from file
 	  memset(file_buf, 0, BUF_SIZE);
@@ -505,11 +512,13 @@ public:
 	  // add to list of outstanding packets
 	  p_list.push_back(data);
 	  //fprintf(stderr, "p_list size: %lu\n", p_list.size());
+
+	  cwnd_round = (cwnd / PACKET_SIZE) * PACKET_SIZE;
 	}
-	
 	if (bytes_read == 0 && p_list.empty()) {
 	  break;
 	}
+	
       }
     }
     return true;
@@ -897,20 +906,4 @@ private:
   // stores unACKed packets in case we need to retransmit
   std::list<packet_data> p_list;
 
-  int getCwndBase() {
-    p_list.sort(compTime);
-    return p_list.front().packet->h_seq_num();
-  }
-
-  int roundUp(int numToRound, int multiple) {
-    if(multiple == 0) {
-	return numToRound;
-    }
-
-    int remainder = numToRound % multiple;
-    if (remainder == 0) {
-	return numToRound;
-    }
-    return numToRound + multiple - remainder;
-  }  
 };
